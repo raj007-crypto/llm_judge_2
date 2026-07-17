@@ -129,7 +129,7 @@ def run_eval(question: str, expected: str = ""):
     overall = correct if expected else in_ctx
 
     if expected:
-        print("\n[2/3] Running GEval judge (reference only, does not affect pass/fail)...")
+        print("\n[2/3] Running GEval judge ....")   
         test_case = LLMTestCase(
             input=question,
             actual_output=answer,
