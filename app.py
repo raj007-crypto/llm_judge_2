@@ -10,7 +10,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 
-DOCS_PATH = os.path.join(os.path.dirname(__file__), "docs.txt")
+DOCS_PATH = os.path.join(os.path.dirname(__file__), "invoice_docs.txt")
 CHROMA_DIR = os.path.join(os.path.dirname(__file__), "chroma_db")
 COLLECTION_NAME = "docs_collection"
 MODEL_NAME = "qwen2.5:1.5b"
@@ -52,8 +52,11 @@ def format_docs(docs):
 def build_rag_chain(vectorstore):
     prompt_template = PromptTemplate(
         template=(
-            "Use the following context to answer the question. "
-            "If the answer is not in the context, say you don't know.\n\n"
+            "You are an invoice data extraction assistant. "
+            "Answer the question using ONLY the information in the context below. "
+            "Extract the exact value, number, name, or code as it appears in the context. "
+            "Do not confuse different fields — each line in the table is a separate item. "
+            "If the context does not contain the answer, say 'I don't know'.\n\n"
             "Context:\n{context}\n\n"
             "Question: {question}\n\n"
             "Answer:"
@@ -62,7 +65,7 @@ def build_rag_chain(vectorstore):
     )
 
     llm = ChatOllama(model=MODEL_NAME, temperature=0)
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
 
     rag_chain = (
         {"context": retriever | format_docs, "question": RunnablePassthrough()}
@@ -73,7 +76,7 @@ def build_rag_chain(vectorstore):
     return rag_chain, retriever
 
 
-print("Building vector store from docs.txt...")
+print("Building vector store from invoice_docs.txt...")
 vectorstore = build_vectorstore()
 rag_chain, retriever = build_rag_chain(vectorstore)
 print("RAG pipeline ready.")
