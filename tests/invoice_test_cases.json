@@ -1,26 +1,112 @@
 [
-  {"question": "What is the commercial invoice number?", "expected": "190825/AN-SAW"},
-  {"question": "What is the pro forma invoice number?", "expected": "140825/AN-SAW"},
-  {"question": "What is the total invoice amount in USD?", "expected": "17,958.00"},
-  {"question": "What is the container number?", "expected": "TGHU1776932"},
-  {"question": "What is the HS code for the bamboo sticks?", "expected": "14011000"},
-  {"question": "What is the quantity of 9 inch bamboo stick in KGS?", "expected": "15,000"},
-  {"question": "What is the quantity of 12 inch bamboo stick in KGS?", "expected": "6,480"},
-  {"question": "What is the CIF price per KG for 9 inch bamboo stick?", "expected": "0.830"},
-  {"question": "What is the CIF price per KG for 12 inch bamboo stick?", "expected": "0.850"},
-  {"question": "Who is the beneficiary bank?", "expected": "Asia Commercial Bank - Phan Dang Luu Branch"},
-  {"question": "What is the swift code?", "expected": "ASCBVNVX"},
-  {"question": "What is the account number?", "expected": "98753889"},
-  {"question": "Who is the consignee or buyer?", "expected": "SRIRAM AGARBATHI WORKS"},
-  {"question": "Who is the seller?", "expected": "AN NAM INTERNATIONAL CO., LTD"},
-  {"question": "What is the total quantity in KGS?", "expected": "21,480"},
-  {"question": "How many bags are there in total?", "expected": "537"},
-  {"question": "What is the bill number?", "expected": "SGN2843298"},
-  {"question": "What is the vessel name?", "expected": "SINAR SIANTAR 080S"},
-  {"question": "What is the port of origin?", "expected": "HAI PHONG PORT, VIETNAM"},
-  {"question": "What is the destination port?", "expected": "CHENNAI PORT, INDIA"},
-  {"question": "What is the payment method?", "expected": "TTR 100%"},
-  {"question": "When is the time of delivery?", "expected": "September, 2025"},
-  {"question": "What is the amount for 9 inch bamboo stick?", "expected": "12,450.00"},
-  {"question": "What is the amount for 12 inch bamboo stick?", "expected": "5,508.00"}
+  {
+    "question": "What is the type of this invoice?",
+    "expected": "COMMERCIAL INVOICE",
+    "field": "invoice_type"
+  },
+  {
+    "question": "What is the invoice number?",
+    "expected": "140825/AN-SAW",
+    "field": "invoice_number"
+  },
+  {
+    "question": "What is the invoice date?",
+    "expected": "14th. Aug., 2025",
+    "field": "invoice_date"
+  },
+  {
+    "question": "What goods are described in the invoice?",
+    "expected": "9 INCHES BAMBOO STICK 1.3MM (FOR MAKING AGARBATTI)\n12 INCHES BAMBOO STICK 1.3MM (FOR MAKING AGARBATTI)",
+    "field": "goods_description"
+  },
+  {
+    "question": "What is the quantity of goods?",
+    "expected": "21,480",
+    "field": "quantity_of_goods"
+  },
+  {
+    "question": "What are the units of quantity?",
+    "expected": "537",
+    "field": "units_of_quantity"
+  },
+  {
+    "question": "What is the total invoice amount?",
+    "expected": "17,958.00",
+    "field": "total_amount"
+  },
+  {
+    "question": "What currency is the invoice in?",
+    "expected": "USD",
+    "field": "currency"
+  },
+  {
+    "question": "What are the payment terms?",
+    "expected": "By TTR 100% payment: after received documents scan.",
+    "field": "payment_terms"
+  },
+  {
+    "question": "Who is the beneficiary?",
+    "expected": "An Nam International Co., Ltd",
+    "field": "beneficiary_name"
+  },
+  {
+    "question": "What country is the beneficiary in?",
+    "expected": "Vietnam",
+    "field": "beneficiary_country"
+  },
+  {
+    "question": "Is the beneficiary's signature present on the document?",
+    "expected": "NOT_PRESENT",
+    "field": "beneficiary_signature_present"
+  },
+  {
+    "question": "Who is the applicant or buyer?",
+    "expected": "Messrs.: SRIRAM AGARBATHI WORKS",
+    "field": "applicant_name"
+  },
+  {
+    "question": "Is the applicant's signature present on the document?",
+    "expected": "NOT_PRESENT",
+    "field": "applicant_signature_present"
+  },
+  {
+    "question": "Who is the remitter?",
+    "expected": "NOT_PRESENT",
+    "field": "remitter_name"
+  },
+  {
+    "question": "What country is the remitter in?",
+    "expected": "Vietnam",
+    "field": "remitter_country"
+  },
+  {
+    "question": "What is the beneficiary bank name?",
+    "expected": "Asia Commercial Bank - Phan Dang Luu Branch.",
+    "field": "beneficiary_bank_name"
+  },
+  {
+    "question": "What is the beneficiary bank account number?",
+    "expected": "98753889",
+    "field": "beneficiary_bank_account_number"
+  },
+  {
+    "question": "What country is the beneficiary bank in?",
+    "expected": "Vietnam",
+    "field": "beneficiary_bank_country"
+  },
+  {
+    "question": "What is the beneficiary bank swift code?",
+    "expected": "ASCBVNVX",
+    "field": "beneficiary_swift_code"
+  },
+  {
+    "question": "What is the intermediary bank name?",
+    "expected": "NOT_PRESENT",
+    "field": "intermediary_bank_name"
+  },
+  {
+    "question": "What is the intermediary bank swift code?",
+    "expected": "NOT_PRESENT",
+    "field": "intermediary_swift"
+  }
 ]

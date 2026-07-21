@@ -33,6 +33,8 @@ def run_test(tc, idx, total):
 
     correct_answer = check_answer_correctness(expected, answer)
     in_context = check_answer_in_context(answer, contexts)
+    if expected.upper() == "NOT_PRESENT":
+        in_context = not in_context
 
     test_case = LLMTestCase(
         input=question,

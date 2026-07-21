@@ -3,6 +3,7 @@ import os
 import re
 import requests
 from deepeval.metrics import GEval
+from deepeval.metrics.g_eval import Rubric
 from deepeval.test_case import LLMTestCase, SingleTurnParams
 from deepeval.models import OllamaModel
 
@@ -24,8 +25,6 @@ EVAL_STEPS = [
     "A short, direct answer that contains the correct value is a perfect answer. Do NOT penalize for being concise.",
     "If the actual output matches a fact from the context, score 5. If partially correct, score 3. If unsupported, score 1.",
 ]
-
-from deepeval.metrics.g_eval import Rubric
 
 invoice_geval = GEval(
     name="Invoice Faithfulness",
@@ -63,6 +62,14 @@ def normalize(s: str) -> str:
 
 
 def check_answer_correctness(expected: str, answer: str) -> bool:
+    if expected.upper() == "NOT_PRESENT":
+        ans = answer.lower()
+        return any(phrase in ans for phrase in [
+            "don't know", "not present", "not mentioned",
+            "not found", "not available", "no information",
+            "not available in", "cannot find", "no data",
+            "does not mention", "not specified",
+        ])
     exp = normalize(expected)
     ans = normalize(answer)
     if exp in ans:
