@@ -14,6 +14,15 @@ from interactive_eval import (
 BACKEND_URL = "http://localhost:8000/query"
 TEST_CASES_PATH = os.path.join(os.path.dirname(__file__), "invoice_test_cases.json")
 
+ADDITIONAL_QUESTIONS = [
+    "Which date is the time delivery on?",
+    "What is the bill number?",
+    "What are the bank charges?",
+    "Where is the shipment from?",
+    "Where is the shipment going?",
+    "What is the vessel name?",
+]
+
 
 def run_test(tc, idx, total):
     question = tc["question"]
@@ -32,12 +41,19 @@ def run_test(tc, idx, total):
     correct_answer = check_answer_correctness(expected, answer)
     in_context = check_answer_in_context(answer, contexts)
 
-    score, reason = judge_answer(question, answer, expected)
-    overall_pass = judge_pass(score, expected)
+    combined_context = "\n".join(contexts)
+
+    if expected:
+        score, reason = judge_answer(question, answer, expected)
+    else:
+        score, reason = judge_answer(question, answer, "", combined_context)
+    
+    overall_pass = judge_pass(score, expected if expected else "CONTEXT_BASED")
 
     status = "PASS" if overall_pass else "FAIL"
     print(f"  Answer   : {answer}")
-    print(f"  Expected : {expected}")
+    if expected:
+        print(f"  Expected : {expected}")
     score_str = f"{score}/5" if score is not None else "N/A"
     print(f"  Judge    : {score_str}")
     print(f"  Correct  : {'YES' if correct_answer else 'NO'}")
@@ -59,6 +75,9 @@ def run_test(tc, idx, total):
 def main():
     with open(TEST_CASES_PATH) as f:
         test_cases = json.load(f)
+
+    for q in ADDITIONAL_QUESTIONS:
+        test_cases.append({"question": q, "expected": "", "field": "additional"})
 
     print("=" * 70)
     print("  Invoice RAG + LLM Judge — Full Evaluation Suite")

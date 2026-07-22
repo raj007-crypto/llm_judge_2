@@ -1,3 +1,4 @@
+import json
 import os
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -8,13 +9,34 @@ from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 
 DOCS_PATH = os.path.join(os.path.dirname(__file__), "invoice_docs.txt")
 CHROMA_DIR = os.path.join(os.path.dirname(__file__), "chroma_db")
+SYNONYMS_PATH = os.path.join(os.path.dirname(__file__), "synonyms.json")
 COLLECTION_NAME = "docs_collection"
 MODEL_NAME = "qwen2.5:1.5b"
 EMBEDDING_MODEL = "nomic-embed-text"
+
+def load_synonyms():
+    """Load synonym mapping from synonyms.json."""
+    if os.path.exists(SYNONYMS_PATH):
+        with open(SYNONYMS_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def expand_query(query: str, synonyms: dict) -> str:
+    """Expand query with synonyms for better semantic retrieval."""
+    query_lower = query.lower()
+    expanded_terms = [query]
+    
+    for field, syns in synonyms.items():
+        for syn in syns:
+            if syn.lower() in query_lower:
+                expanded_terms.extend(syns[:3])
+                break
+    
+    return " ".join(set(expanded_terms))
 
 app = FastAPI(title="RAG API", version="1.0.0")
 
@@ -49,7 +71,7 @@ def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
 
-def build_rag_chain(vectorstore):
+def build_rag_chain(vectorstore, synonyms):
     prompt_template = PromptTemplate(
         template=(
             "You are an invoice data extraction assistant. "
@@ -67,8 +89,12 @@ def build_rag_chain(vectorstore):
     llm = ChatOllama(model=MODEL_NAME, temperature=0)
     retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
 
+    def expanded_retriever(query):
+        expanded = expand_query(query, synonyms)
+        return retriever.invoke(expanded)
+
     rag_chain = (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        {"context": RunnableLambda(expanded_retriever) | format_docs, "question": RunnablePassthrough()}
         | prompt_template
         | llm
         | StrOutputParser()
@@ -78,7 +104,8 @@ def build_rag_chain(vectorstore):
 
 print("Building vector store from invoice_docs.txt...")
 vectorstore = build_vectorstore()
-rag_chain, retriever = build_rag_chain(vectorstore)
+synonyms = load_synonyms()
+rag_chain, retriever = build_rag_chain(vectorstore, synonyms)
 print("RAG pipeline ready.")
 
 

@@ -32,6 +32,23 @@ Rules:
 
 Your answer (only a number):"""
 
+JUDGE_PROMPT_CONTEXT = """You are a strict judge evaluating whether an answer is correct based on the document context.
+
+Question: "{question}"
+Context: "{context}"
+Answer: "{actual}"
+
+Rules:
+- Check if the answer is supported by the context
+- Check if the answer is complete and relevant to the question
+- If the answer is fully supported by context and answers the question → answer: 5
+- If the answer is partially supported or incomplete → answer: 3
+- If the answer is not supported by context or irrelevant → answer: 1
+- If the answer says "I don't know" but context has the answer → answer: 1
+- If the answer says "I don't know" and context doesn't have the answer → answer: 5
+
+Your answer (only a number):"""
+
 _TEST_CASES = {}
 if os.path.exists(TEST_CASES_PATH):
     with open(TEST_CASES_PATH) as _f:
@@ -48,13 +65,15 @@ def normalize_for_judge(s: str) -> str:
     return s
 
 
-def judge_answer(question: str, answer: str, expected: str) -> tuple[int, str]:
+def judge_answer(question: str, answer: str, expected: str, context: str = "") -> tuple[int, str]:
     if expected.upper() == "NOT_PRESENT":
         prompt = JUDGE_PROMPT_NOT_PRESENT.format(actual=answer)
-    else:
+    elif expected:
         norm_expected = normalize_for_judge(expected)
         norm_answer = normalize_for_judge(answer)
         prompt = JUDGE_PROMPT_TEMPLATE.format(expected=norm_expected, actual=norm_answer)
+    else:
+        prompt = JUDGE_PROMPT_CONTEXT.format(question=question, context=context[:1000], actual=answer)
     try:
         resp = requests.post(OLLAMA_URL, json={
             "model": JUDGE_MODEL,
@@ -81,6 +100,8 @@ def judge_pass(score: int | None, expected: str) -> bool:
         return False
     if expected.upper() == "NOT_PRESENT":
         return score >= 4
+    if expected == "CONTEXT_BASED":
+        return score >= 3
     return score >= 3
 
 
@@ -177,15 +198,19 @@ def run_eval(question: str, expected: str = ""):
         preview = ctx[:120].replace("\n", " ")
         print(f"  [{i}] {preview}...")
 
+    combined_context = "\n".join(contexts)
+
     if expected:
-        print("\n[2/3] Running LLM judge ....")
+        print("\n[2/3] Running LLM judge (test case mode) ....")
         score, reason = judge_answer(question, answer, expected)
-        overall = judge_pass(score, expected)
-        score_str = f"{score}/5" if score is not None else "N/A"
-        print(f"  Judge     : {score_str}")
-        print(f"  Reason    : {reason[:200]}")
     else:
-        overall = in_ctx
+        print("\n[2/3] Running LLM judge (context-based mode) ....")
+        score, reason = judge_answer(question, answer, "", combined_context)
+    
+    overall = judge_pass(score, expected if expected else "CONTEXT_BASED")
+    score_str = f"{score}/5" if score is not None else "N/A"
+    print(f"  Judge     : {score_str}")
+    print(f"  Reason    : {reason[:200]}")
 
     print(f"\n  Overall   : {'PASS' if overall else 'FAIL'}")
     print(f"  (correct={'YES' if correct else 'NO'}, in_context={'YES' if in_ctx else 'NO'})")

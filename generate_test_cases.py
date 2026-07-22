@@ -18,6 +18,12 @@ from doctr.models import ocr_predictor
 from langchain_ollama import ChatOllama
 
 LLM_MODEL = "qwen2.5:1.5b"
+SYNONYMS_PATH = os.path.join(os.path.dirname(__file__), "synonyms.json")
+
+def load_synonyms():
+    """Load synonym mapping from synonyms.json."""
+    with open(SYNONYMS_PATH, encoding="utf-8") as f:
+        return json.load(f)
 
 FIELD_QUESTIONS = {
     "invoice_type": "What is the type of this invoice?",
@@ -88,6 +94,19 @@ REGEX_FIELDS = {
     ],
 }
 
+SYNONYM_FIELDS = [
+    "invoice_number",
+    "invoice_date",
+    "invoice_type",
+    "total_amount",
+    "currency",
+    "quantity_of_goods",
+    "units_of_quantity",
+    "beneficiary_swift_code",
+    "beneficiary_bank_account_number",
+    "payment_terms",
+]
+
 LLM_FIELDS = [
     "goods_description",
     "beneficiary_name",
@@ -115,6 +134,7 @@ def extract_text(pdf_path: str) -> str:
 
 
 def extract_regex(text: str) -> dict:
+    """Extract fields using original regex patterns."""
     fields = {}
     for field, patterns in REGEX_FIELDS.items():
         for pattern in patterns:
@@ -127,6 +147,47 @@ def extract_regex(text: str) -> dict:
                 break
         if field not in fields:
             fields[field] = "NOT_PRESENT"
+    return fields
+
+
+def extract_with_synonyms(text: str, synonyms: dict, regex_fields: dict) -> dict:
+    """Extract fields using synonyms as fallback for regex failures."""
+    fields = {}
+    for field in SYNONYM_FIELDS:
+        if regex_fields.get(field, "NOT_PRESENT") != "NOT_PRESENT":
+            fields[field] = regex_fields[field]
+            continue
+        
+        field_synonyms = synonyms.get(field, [])
+        extracted = False
+        
+        for synonym in field_synonyms:
+            escaped = re.escape(synonym)
+            patterns = [
+                rf"{escaped}[:\s]+([\d,]+\.?\d*)",
+                rf"{escaped}[:\s]+([^\n]+)",
+                rf"{escaped}\s+([\d,]+\.?\d*)",
+                rf"{escaped}\s+([^\n]+)",
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    value = match.group(1).strip()
+                    if field == "currency" and "dollar" in value.lower():
+                        value = "USD"
+                    elif field == "currency" and len(value) > 3:
+                        value = value[:3].upper()
+                    fields[field] = value
+                    extracted = True
+                    break
+            
+            if extracted:
+                break
+        
+        if not extracted:
+            fields[field] = "NOT_PRESENT"
+    
     return fields
 
 
@@ -154,10 +215,10 @@ def extract_llm(text: str, llm, fields_to_extract: list) -> dict:
     return fields
 
 
-def validate_fields(fields: dict, regex_fields: dict) -> dict:
+def validate_fields(fields: dict, synonym_fields: dict) -> dict:
     validated = dict(fields)
 
-    swift = regex_fields.get("beneficiary_swift_code", "")
+    swift = synonym_fields.get("beneficiary_swift_code", "")
     if swift and not swift.startswith("NOT"):
         if validated.get("intermediary_swift", "") == swift:
             validated["intermediary_swift"] = "NOT_PRESENT"
@@ -214,12 +275,19 @@ def main():
     for k, v in regex_fields.items():
         print(f"  {k}: {v[:80]}")
 
-    print("\n[3/4] LLM field extraction...")
+    print("\n[3/4] Synonym fallback extraction...")
+    synonyms = load_synonyms()
+    synonym_fields = extract_with_synonyms(text, synonyms, regex_fields)
+    for k, v in synonym_fields.items():
+        if regex_fields.get(k, "NOT_PRESENT") == "NOT_PRESENT" and v != "NOT_PRESENT":
+            print(f"  {k} (synonym): {v[:80]}")
+
+    print("\n[4/4] LLM field extraction...")
     llm = ChatOllama(model=LLM_MODEL, temperature=0)
     llm_fields = extract_llm(text, llm, LLM_FIELDS)
 
-    all_fields = {**regex_fields, **llm_fields}
-    all_fields = validate_fields(all_fields, regex_fields)
+    all_fields = {**synonym_fields, **llm_fields}
+    all_fields = validate_fields(all_fields, synonym_fields)
 
     print("\n[4/4] Generating test cases...")
     test_cases = build_test_cases(all_fields)

@@ -1,0 +1,184 @@
+{
+  "invoice_type": [
+    "invoice type",
+    "type of invoice",
+    "document type",
+    "invoice category",
+    "commercial invoice",
+    "proforma invoice",
+    "pro forma invoice"
+  ],
+  "invoice_number": [
+    "invoice number",
+    "invoice no",
+    "invoice #",
+    "bill number",
+    "bill no",
+    "document number",
+    "reference number",
+    "ref no"
+  ],
+  "invoice_date": [
+    "invoice date",
+    "date of invoice",
+    "billing date",
+    "document date",
+    "issue date",
+    "dated"
+  ],
+  "goods_description": [
+    "goods description",
+    "description of goods",
+    "item description",
+    "product description",
+    "commodity",
+    "merchandise",
+    "items",
+    "products"
+  ],
+  "quantity_of_goods": [
+    "quantity",
+    "total quantity",
+    "qty",
+    "amount of goods",
+    "number of items",
+    "total items",
+    "units"
+  ],
+  "units_of_quantity": [
+    "units",
+    "unit of measure",
+    "uom",
+    "measurement",
+    "weight",
+    "kgs",
+    "kg",
+    "lbs",
+    "bags",
+    "pieces"
+  ],
+  "total_amount": [
+    "total amount",
+    "total",
+    "invoice total",
+    "grand total",
+    "amount due",
+    "total value",
+    "net amount",
+    "gross amount"
+  ],
+  "currency": [
+    "currency",
+    "currency type",
+    "payment currency",
+    "denomination",
+    "usd",
+    "eur",
+    "gbp"
+  ],
+  "payment_terms": [
+    "payment terms",
+    "terms of payment",
+    "payment conditions",
+    "payment method",
+    "payment mode",
+    "payment instructions"
+  ],
+  "beneficiary_name": [
+    "beneficiary",
+    "beneficiary name",
+    "payee",
+    "payee name",
+    "receiver",
+    "recipient",
+    "party receiving payment"
+  ],
+  "beneficiary_country": [
+    "beneficiary country",
+    "payee country",
+    "receiver country",
+    "recipient country",
+    "country of beneficiary"
+  ],
+  "beneficiary_signature_present": [
+    "beneficiary signature",
+    "payee signature",
+    "receiver signature",
+    "signature of beneficiary"
+  ],
+  "applicant_name": [
+    "applicant",
+    "applicant name",
+    "buyer",
+    "buyer name",
+    "purchaser",
+    "orderer",
+    "importer",
+    "consignee"
+  ],
+  "applicant_signature_present": [
+    "applicant signature",
+    "buyer signature",
+    "purchaser signature",
+    "signature of applicant"
+  ],
+  "remitter_name": [
+    "remitter",
+    "remitter name",
+    "sender",
+    "sender name",
+    "payer",
+    "payer name",
+    "ordering party",
+    "exporter"
+  ],
+  "remitter_country": [
+    "remitter country",
+    "sender country",
+    "payer country",
+    "country of remitter"
+  ],
+  "beneficiary_bank_name": [
+    "beneficiary bank",
+    "receiver bank",
+    "receiving bank",
+    "payee bank",
+    "credit to bank",
+    "bank of beneficiary",
+    "bank name"
+  ],
+  "beneficiary_bank_account_number": [
+    "account number",
+    "bank account",
+    "account no",
+    "beneficiary account",
+    "receiver account"
+  ],
+  "beneficiary_bank_country": [
+    "bank country",
+    "beneficiary bank country",
+    "receiver bank country",
+    "country of bank"
+  ],
+  "beneficiary_swift_code": [
+    "swift code",
+    "bic code",
+    "bank identifier code",
+    "beneficiary swift",
+    "receiver swift",
+    "bank swift"
+  ],
+  "intermediary_bank_name": [
+    "intermediary bank",
+    "correspondent bank",
+    "nodal bank",
+    "intermediate bank",
+    "middleman bank"
+  ],
+  "intermediary_swift": [
+    "intermediary swift",
+    "correspondent swift",
+    "intermediate swift",
+    "nodal swift"
+  ]
+}

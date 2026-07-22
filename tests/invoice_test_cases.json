@@ -1,7 +1,7 @@
 [
   {
     "question": "What is the type of this invoice?",
-    "expected": "Commercial Invoice",
+    "expected": "COMMERCIAL INVOICE",
     "field": "invoice_type"
   },
   {
@@ -71,7 +71,7 @@
   },
   {
     "question": "Who is the remitter?",
-    "expected": "NOT_PRESENT",
+    "expected": "Messrs.: SRIRAM AGARBATHI WORKS",
     "field": "remitter_name"
   },
   {
