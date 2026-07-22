@@ -51,9 +51,15 @@ Your answer (only a number):"""
 
 _TEST_CASES = {}
 if os.path.exists(TEST_CASES_PATH):
-    with open(TEST_CASES_PATH) as _f:
-        for _tc in json.load(_f):
-            _TEST_CASES[_tc["question"].lower().strip()] = _tc["expected"]
+    try:
+        with open(TEST_CASES_PATH) as _f:
+            data = json.load(_f)
+            if isinstance(data, list):
+                for _tc in data:
+                    if isinstance(_tc, dict) and "question" in _tc and "expected" in _tc:
+                        _TEST_CASES[_tc["question"].lower().strip()] = _tc["expected"]
+    except (json.JSONDecodeError, KeyError):
+        pass
 
 
 def normalize_for_judge(s: str) -> str:

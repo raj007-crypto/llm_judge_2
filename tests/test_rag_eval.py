@@ -21,27 +21,34 @@ ADDITIONAL_QUESTIONS = [
     "Where is the shipment from?",
     "Where is the shipment going?",
     "What is the vessel name?",
+    "What is the consignee address?",
+    "What is the HS code?",
+    "What is the container number?",
+    "What are the shipping marks?",
 ]
 
 
 def run_test(tc, idx, total):
-    question = tc["question"]
-    expected = tc["expected"]
+    question = tc.get("question", "")
+    expected = tc.get("expected", "")
+
+    if not question:
+        return {"pass": False, "question": "EMPTY", "answer": "N/A", "error": "No question"}
 
     print(f"\n[{idx}/{total}] {question}")
 
     try:
         result = ask_backend(question)
-        answer = result["answer"]
-        contexts = result["source_documents"]
+        answer = result.get("answer", "")
+        contexts = result.get("source_documents", [])
     except Exception as e:
         print(f"  Backend error: {e}")
         return {"pass": False, "question": question, "answer": "ERROR", "error": str(e)}
 
-    correct_answer = check_answer_correctness(expected, answer)
+    correct_answer = check_answer_correctness(expected, answer) if expected else False
     in_context = check_answer_in_context(answer, contexts)
 
-    combined_context = "\n".join(contexts)
+    combined_context = "\n".join(contexts) if contexts else ""
 
     if expected:
         score, reason = judge_answer(question, answer, expected)
@@ -73,8 +80,13 @@ def run_test(tc, idx, total):
 
 
 def main():
-    with open(TEST_CASES_PATH) as f:
-        test_cases = json.load(f)
+    try:
+        with open(TEST_CASES_PATH) as f:
+            test_cases = json.load(f)
+            if not isinstance(test_cases, list):
+                test_cases = []
+    except (FileNotFoundError, json.JSONDecodeError):
+        test_cases = []
 
     for q in ADDITIONAL_QUESTIONS:
         test_cases.append({"question": q, "expected": "", "field": "additional"})
