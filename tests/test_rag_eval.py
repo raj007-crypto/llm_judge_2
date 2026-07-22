@@ -2,19 +2,17 @@ import json
 import os
 import time
 
-from deepeval.test_case import LLMTestCase
 from interactive_eval import (
     JUDGE_MODEL,
     ask_backend,
-    invoice_geval,
+    judge_answer,
+    judge_pass,
     check_answer_in_context,
     check_answer_correctness,
 )
 
 BACKEND_URL = "http://localhost:8000/query"
 TEST_CASES_PATH = os.path.join(os.path.dirname(__file__), "invoice_test_cases.json")
-
-metric = invoice_geval
 
 
 def run_test(tc, idx, total):
@@ -33,27 +31,15 @@ def run_test(tc, idx, total):
 
     correct_answer = check_answer_correctness(expected, answer)
     in_context = check_answer_in_context(answer, contexts)
-    if expected.upper() == "NOT_PRESENT":
-        in_context = not in_context
 
-    test_case = LLMTestCase(
-        input=question,
-        actual_output=answer,
-        expected_output=expected,
-        retrieval_context=contexts,
-    )
-
-    metric.measure(test_case)
-    score = metric.score
-    rubric = round(score * 5) if score is not None else "?"
-
-    overall_pass = correct_answer or in_context
+    score, reason = judge_answer(question, answer, expected)
+    overall_pass = judge_pass(score, expected)
 
     status = "PASS" if overall_pass else "FAIL"
     print(f"  Answer   : {answer}")
     print(f"  Expected : {expected}")
-    score_str = f"{score:.2f}" if score is not None else "N/A"
-    print(f"  Judge    : {rubric}/5 ({score_str})  (reference only)")
+    score_str = f"{score}/5" if score is not None else "N/A"
+    print(f"  Judge    : {score_str}")
     print(f"  Correct  : {'YES' if correct_answer else 'NO'}")
     print(f"  Verdict  : {status}")
 
@@ -64,9 +50,9 @@ def run_test(tc, idx, total):
         "question": question,
         "answer": answer,
         "expected": expected,
-        "rubric": rubric,
+        "rubric": score,
         "score": score,
-        "reason": metric.reason,
+        "reason": reason,
     }
 
 
@@ -78,9 +64,9 @@ def main():
     print("  Invoice RAG + LLM Judge — Full Evaluation Suite")
     print("=" * 70)
     print(f"  Backend  : {BACKEND_URL}")
-    print(f"  Judge    : {JUDGE_MODEL} (reference only)")
+    print(f"  Judge    : {JUDGE_MODEL}")
     print(f"  Tests    : {len(test_cases)} invoice Q&A pairs")
-    print("  Pass/Fail based on: answer correctness OR context match")
+    print("  Pass/Fail based on: LLM judge evaluation (score >= 3 = PASS)")
     print("=" * 70)
 
     results = []

@@ -1,7 +1,7 @@
 [
   {
     "question": "What is the type of this invoice?",
-    "expected": "COMMERCIAL INVOICE",
+    "expected": "Commercial Invoice",
     "field": "invoice_type"
   },
   {

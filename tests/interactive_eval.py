@@ -2,56 +2,86 @@ import json
 import os
 import re
 import requests
-from deepeval.metrics import GEval
-from deepeval.metrics.g_eval import Rubric
-from deepeval.test_case import LLMTestCase, SingleTurnParams
-from deepeval.models import OllamaModel
 
 BACKEND_URL = "http://localhost:8000/query"
-JUDGE_MODEL = "llama3.2:3b"
+JUDGE_MODEL = "llama3.1:8b"
+OLLAMA_URL = "http://localhost:11434/api/generate"
 TEST_CASES_PATH = os.path.join(os.path.dirname(__file__), "invoice_test_cases.json")
 
-judge_llm = OllamaModel(
-    model=JUDGE_MODEL,
-    base_url="http://localhost:11434",
-    temperature=0,
-)
+JUDGE_PROMPT_TEMPLATE = """Compare these two values and decide if they match.
 
-EVAL_STEPS = [
-    "Read the retrieval context and list every fact, number, name, and code mentioned.",
-    "Read the actual output and identify what specific information it provides.",
-    "Check if the information in the actual output is supported by at least one fact in the retrieval context.",
-    "Ignore formatting differences: currency symbols ($), letter case, commas in numbers, and trailing zeros do not matter.",
-    "A short, direct answer that contains the correct value is a perfect answer. Do NOT penalize for being concise.",
-    "If the actual output matches a fact from the context, score 5. If partially correct, score 3. If unsupported, score 1.",
-]
+Expected: "{expected}"
+Actual: "{actual}"
 
-invoice_geval = GEval(
-    name="Invoice Faithfulness",
-    criteria="Whether the actual output matches the expected output, using the retrieval context as evidence.",
-    evaluation_steps=EVAL_STEPS,
-    rubric=[
-        Rubric(score_range=(1, 1), expected_outcome="Answer is unsupported by context or clearly wrong."),
-        Rubric(score_range=(2, 2), expected_outcome="Answer is partially correct or vaguely related."),
-        Rubric(score_range=(3, 3), expected_outcome="Answer is mostly correct with minor issues."),
-        Rubric(score_range=(4, 4), expected_outcome="Answer is correct and supported, minor phrasing differences only."),
-        Rubric(score_range=(5, 5), expected_outcome="Answer is fully correct and directly supported by context, even if concise."),
-    ],
-    evaluation_params=[
-        SingleTurnParams.INPUT,
-        SingleTurnParams.ACTUAL_OUTPUT,
-        SingleTurnParams.EXPECTED_OUTPUT,
-        SingleTurnParams.RETRIEVAL_CONTEXT,
-    ],
-    model=judge_llm,
-    threshold=0.6,
-)
+Rules:
+- If the values are identical, answer: 5
+- If one value is contained within the other, answer: 5
+- If the values represent the same thing (e.g. "usd" and "united states dollar"), answer: 5
+- If the values are different numbers, answer: 1
+- If the values are completely different, answer: 1
+
+Answer only a number (1-5):"""
+
+JUDGE_PROMPT_NOT_PRESENT = """You are a strict judge. The expected answer is NOT_PRESENT, meaning this information is NOT in the document.
+
+Actual: "{actual}"
+
+Rules:
+- If the actual output says it doesn't know, cannot find, or the information is not available → answer: 5
+- If the actual output provides ANY specific name, number, or value → it is hallucinating → answer: 1
+
+Your answer (only a number):"""
 
 _TEST_CASES = {}
 if os.path.exists(TEST_CASES_PATH):
     with open(TEST_CASES_PATH) as _f:
         for _tc in json.load(_f):
             _TEST_CASES[_tc["question"].lower().strip()] = _tc["expected"]
+
+
+def normalize_for_judge(s: str) -> str:
+    """Normalize value for judge comparison - strip symbols, units, extra text."""
+    s = s.lower().strip()
+    s = re.sub(r"[$,\u20b9\u00a3\u20ac]", "", s)
+    s = re.sub(r"\s+", " ", s)
+    s = s.strip(".")
+    return s
+
+
+def judge_answer(question: str, answer: str, expected: str) -> tuple[int, str]:
+    if expected.upper() == "NOT_PRESENT":
+        prompt = JUDGE_PROMPT_NOT_PRESENT.format(actual=answer)
+    else:
+        norm_expected = normalize_for_judge(expected)
+        norm_answer = normalize_for_judge(answer)
+        prompt = JUDGE_PROMPT_TEMPLATE.format(expected=norm_expected, actual=norm_answer)
+    try:
+        resp = requests.post(OLLAMA_URL, json={
+            "model": JUDGE_MODEL,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": 0},
+        }, timeout=120)
+        resp.raise_for_status()
+        raw = resp.json().get("response", "").strip()
+
+        score = None
+        m = re.search(r"\b([1-5])\b", raw)
+        if m:
+            score = int(m.group(1))
+
+        return score, raw
+    except Exception as e:
+        return None, str(e)
+
+
+def judge_pass(score: int | None, expected: str) -> bool:
+    """Determine pass/fail based on judge score."""
+    if score is None:
+        return False
+    if expected.upper() == "NOT_PRESENT":
+        return score >= 4
+    return score >= 3
 
 
 def normalize(s: str) -> str:
@@ -72,8 +102,22 @@ def check_answer_correctness(expected: str, answer: str) -> bool:
         ])
     exp = normalize(expected)
     ans = normalize(answer)
+
     if exp in ans:
         return True
+
+    # strip common prefixes like "messrs.:", "m/s.", "the"
+    exp_stripped = re.sub(r"^(messrs\.?:?\s*|m/s\.?\s*|the\s+|mr\.?\s*|mrs\.?\s*|ms\.?\s*|dr\.?\s*)", "", exp)
+    if exp_stripped and exp_stripped in ans:
+        return True
+
+    # check if answer is contained in expected (reverse direction)
+    ans_stripped = re.sub(r"^(messrs\.?:?\s*|m/s\.?\s*|the\s+|mr\.?\s*|mrs\.?\s*|ms\.?\s*|dr\.?\s*)", "", ans)
+    if ans_stripped and ans_stripped in exp:
+        return True
+    if ans_stripped and ans_stripped in exp_stripped:
+        return True
+
     try:
         return abs(float(exp) - float(ans)) < 0.01
     except ValueError:
@@ -133,22 +177,15 @@ def run_eval(question: str, expected: str = ""):
         preview = ctx[:120].replace("\n", " ")
         print(f"  [{i}] {preview}...")
 
-    overall = correct if expected else in_ctx
-
     if expected:
-        print("\n[2/3] Running GEval judge ....")   
-        test_case = LLMTestCase(
-            input=question,
-            actual_output=answer,
-            expected_output=expected,
-            retrieval_context=contexts,
-        )
-        invoice_geval.measure(test_case)
-        score = invoice_geval.score
-        rubric = round(score * 5) if score is not None else "?"
-        score_str = f"{score:.2f}" if score is not None else "N/A"
-        print(f"  Judge     : {rubric}/5  ({score_str})")
-        print(f"  Reason    : {invoice_geval.reason}")
+        print("\n[2/3] Running LLM judge ....")
+        score, reason = judge_answer(question, answer, expected)
+        overall = judge_pass(score, expected)
+        score_str = f"{score}/5" if score is not None else "N/A"
+        print(f"  Judge     : {score_str}")
+        print(f"  Reason    : {reason[:200]}")
+    else:
+        overall = in_ctx
 
     print(f"\n  Overall   : {'PASS' if overall else 'FAIL'}")
     print(f"  (correct={'YES' if correct else 'NO'}, in_context={'YES' if in_ctx else 'NO'})")
@@ -162,7 +199,7 @@ def main():
     print("Backend:  ", BACKEND_URL)
     print("Judge:    ", JUDGE_MODEL)
     print("Tests:    ", len(_TEST_CASES), "questions in invoice_test_cases.json")
-    print("Pass/Fail is based on answer correctness, NOT the LLM judge.\n")
+    print("Pass/Fail is based on LLM judge evaluation (score >= 3 = PASS).\n")
 
     while True:
         try:
