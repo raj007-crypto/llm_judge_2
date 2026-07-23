@@ -85,7 +85,7 @@ def judge_answer(question: str, answer: str, expected: str, context: str = "") -
             "model": JUDGE_MODEL,
             "prompt": prompt,
             "stream": False,
-            "options": {"temperature": 0},
+            "options": {"temperature": 0, "num_predict": 100},
         }, timeout=120)
         resp.raise_for_status()
         raw = resp.json().get("response", "").strip()
@@ -216,7 +216,7 @@ def run_eval(question: str, expected: str = ""):
     overall = judge_pass(score, expected if expected else "CONTEXT_BASED")
     score_str = f"{score}/5" if score is not None else "N/A"
     print(f"  Judge     : {score_str}")
-    print(f"  Reason    : {reason[:200]}")
+    print(f"  Reason    : {reason}")
 
     print(f"\n  Overall   : {'PASS' if overall else 'FAIL'}")
     print(f"  (correct={'YES' if correct else 'NO'}, in_context={'YES' if in_ctx else 'NO'})")

@@ -1,8 +1,7 @@
 .venv/
 chroma_db/
-server.log
-server_err.log
 .deepeval/
 __pycache__/
 *.pyc
-invoice_docs_export.json
+.ruff_cache/
+invoice/invoice_docs_export.json

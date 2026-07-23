@@ -130,7 +130,9 @@
     "payer",
     "payer name",
     "ordering party",
-    "exporter"
+    "exporter",
+    "buyer",
+    "applicant"
   ],
   "remitter_country": [
     "remitter country",

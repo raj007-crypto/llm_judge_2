@@ -63,7 +63,8 @@ def run_test(tc, idx, total):
         print(f"  Expected : {expected}")
     score_str = f"{score}/5" if score is not None else "N/A"
     print(f"  Judge    : {score_str}")
-    print(f"  Correct  : {'YES' if correct_answer else 'NO'}")
+    if expected:
+        print(f"  Correct  : {'YES' if correct_answer else 'NO'}")
     print(f"  Verdict  : {status}")
 
     return {

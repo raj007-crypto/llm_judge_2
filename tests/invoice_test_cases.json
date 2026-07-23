@@ -26,7 +26,7 @@
   },
   {
     "question": "What are the units of quantity?",
-    "expected": "537",
+    "expected": "BAGS",
     "field": "units_of_quantity"
   },
   {
@@ -76,7 +76,7 @@
   },
   {
     "question": "What country is the remitter in?",
-    "expected": "Vietnam",
+    "expected": "India",
     "field": "remitter_country"
   },
   {
