@@ -20,10 +20,10 @@ from pydantic import BaseModel
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import ChatOllama, OllamaEmbeddings
-from langchain_community.vectorstores import Chroma
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
+import numpy as np
 
 from doctr.io import DocumentFile
 from doctr.models import ocr_predictor
@@ -31,7 +31,6 @@ from doctr.models import ocr_predictor
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOCUMENTS_DIR = os.path.join(BASE_DIR, "documents")
 INVOICE_DIR = os.path.join(BASE_DIR, "invoice")
-CHROMA_DIR = os.path.join(BASE_DIR, "chroma_db")
 TESTS_DIR = os.path.join(BASE_DIR, "tests")
 SYNONYMS_PATH = os.path.join(BASE_DIR, "synonyms.json")
 
@@ -226,9 +225,48 @@ def extract_llm(text, llm, fields_to_extract):
         question = FIELD_QUESTIONS[field]
         prompt = (
             "You are an invoice data extraction assistant. "
-            "Given the invoice text below, extract the value for the field described. "
-            "If the field is not present in the document, reply ONLY with NOT_PRESENT. "
-            "Do not add explanations.\n\n"
+            "Extract the exact value for the field from the invoice text. "
+            "Reply ONLY with the extracted value or NOT_PRESENT. No explanations.\n\n"
+            "EXAMPLE 1:\n"
+            "Invoice text:\n"
+            "Invoice No.: ZG155-2025\n"
+            "Invoice date: 11/18/2025\n"
+            "Currency: USD\n"
+            "TOTAL INVOICE AMOUNT 12,552.250\n"
+            "Beneficiary Name: ZED GLOBAL LLC\n\n"
+            "Field: What is the invoice number?\n"
+            "Value: ZG155-2025\n\n"
+            "EXAMPLE 2:\n"
+            "Invoice text:\n"
+            "Beneficiary Name: ZED GLOBAL LLC\n"
+            "Bank Name: Mashreq Bank\n"
+            "Swift: BOMLAED\n\n"
+            "Field: Who is the beneficiary?\n"
+            "Value: ZED GLOBAL LLC\n\n"
+            "EXAMPLE 3:\n"
+            "Invoice text:\n"
+            "Payment term:100% on CAD\n"
+            "Delivery term: CIF\n\n"
+            "Field: What are the payment terms?\n"
+            "Value: 100% on CAD\n\n"
+            "EXAMPLE 4:\n"
+            "Invoice text:\n"
+            "Port of Loading: Port Apapa, Nigeria\n"
+            "Country of Origin: Nigeria\n\n"
+            "Field: What country is the beneficiary in?\n"
+            "Value: Nigeria\n\n"
+            "EXAMPLE 5:\n"
+            "Invoice text:\n"
+            "STAINLESS STEEL SCRAP 201\n"
+            "GRADE FOR MELTING PURPOSE\n\n"
+            "Field: What goods are described in the invoice?\n"
+            "Value: Stainless Steel Scrap 201, Grade for Melting Purpose\n\n"
+            "EXAMPLE 6:\n"
+            "Invoice text:\n"
+            "BL number: ONEYLOSF03789900\n\n"
+            "Field: Is the beneficiary's signature present on the document?\n"
+            "Value: NOT_PRESENT\n\n"
+            "Now extract from:\n"
             f"Invoice text:\n{text[:3000]}\n\n"
             f"Field: {question}\n"
             "Value:"
@@ -489,10 +527,15 @@ def cmd_serve():
     print("Building vector store from invoice_docs.txt...")
     loader = TextLoader(INVOICE_TEXT_PATH, encoding="utf-8")
     documents = loader.load()
-    splitter = RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=30)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     chunks = splitter.split_documents(documents)
-    embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL)
-    vectorstore = Chroma.from_documents(chunks, embeddings, collection_name=COLLECTION_NAME, persist_directory=CHROMA_DIR)
+    embeddings_model = OllamaEmbeddings(model=EMBEDDING_MODEL)
+    print(f"  Embedding {len(chunks)} chunks...")
+    chunk_texts = [doc.page_content for doc in chunks]
+    chunk_embeddings = embeddings_model.embed_documents(chunk_texts)
+    chunk_embeddings = np.array(chunk_embeddings, dtype=np.float32)
+    norms = np.linalg.norm(chunk_embeddings, axis=1, keepdims=True)
+    chunk_embeddings = chunk_embeddings / np.where(norms == 0, 1, norms)
     synonyms = load_synonyms()
     llm = ChatOllama(model=MODEL_NAME, temperature=0)
     prompt_template = PromptTemplate(
@@ -502,6 +545,14 @@ def cmd_serve():
             "Extract the exact value, number, name, or code as it appears in the context. "
             "Do not confuse different fields — each line in the table is a separate item. "
             "If the context does not contain the answer, say 'I don't know'.\n\n"
+            "IMPORTANT RULES:\n"
+            "- For 'total amount' or 'amount to pay', use the FINAL invoice total "
+            "(labeled 'TOTAL INVOICE AMOUNT', 'TOTAL AMOUNT TOPAY', or 'GRAND TOTAL'), "
+            "NOT individual line-item totals.\n"
+            "- Line-item totals appear on individual rows (e.g., '21,480' next to an item). "
+            "The invoice total appears at the bottom after all items, often labeled 'TOTAL INVOICE AMOUNT' or 'TOTAL AMOUNT TOPAY'.\n"
+            "- If multiple totals appear, prefer the one with the highest label specificity "
+            "('TOTAL INVOICE AMOUNT' > 'TOTAL' > line-item subtotals).\n\n"
             "Important terminology:\n"
             "- Remitter / Buyer / Applicant / Consignee = the party BUYING the goods (who pays)\n"
             "- Beneficiary / Seller = the party SELLING the goods (who receives payment)\n"
@@ -512,8 +563,15 @@ def cmd_serve():
         ),
         input_variables=["context", "question"],
     )
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
     all_chunks = chunks
+
+    def numpy_retrieve(query, top_k=5):
+        q_emb = embeddings_model.embed_query(query)
+        q_emb = np.array(q_emb, dtype=np.float32)
+        q_emb = q_emb / (np.linalg.norm(q_emb) or 1)
+        sims = chunk_embeddings @ q_emb
+        top_idx = np.argsort(sims)[::-1][:top_k]
+        return [chunks[i] for i in top_idx]
 
     KEYWORD_MAP = {
         "remitter": ["BUYER", "Consignee", "APPLICANT", "ORDERING PARTY", "PAYER"],
@@ -541,6 +599,13 @@ def cmd_serve():
                     for kw in keywords:
                         if kw.lower() in content_lower:
                             score += 3
+            total_boost = [
+                "total invoice amount", "total amount to pay", "total amount topay",
+                "grand total", "invoice total", "amount due", "balance due",
+            ]
+            for phrase in total_boost:
+                if phrase in content_lower:
+                    score += 8
             if score > 0:
                 scored.append((score, doc))
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -551,7 +616,7 @@ def cmd_serve():
 
     def hybrid_retriever(query):
         expanded = expand_query(query, synonyms)
-        embedding_docs = retriever.invoke(expanded)
+        embedding_docs = numpy_retrieve(expanded, top_k=5)
         keyword_docs = keyword_search(query, all_chunks, top_k=3)
         seen = set()
         merged = []

@@ -1,7 +1,8 @@
 .venv/
-chroma_db/
-.deepeval/
 __pycache__/
 *.pyc
 .ruff_cache/
-invoice/invoice_docs_export.json
+.deepeval/
+chroma_db/
+invoice/
+documents/
