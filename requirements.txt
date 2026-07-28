@@ -8,3 +8,5 @@ langchain-ollama
 langchain-core
 python-doctr
 numpy
+albumentations
+opencv-python-headless

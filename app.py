@@ -1,10 +1,16 @@
 """Unified Invoice RAG System
 
 Usage:
-    python app.py extract [pdf_path]    - Extract text from PDF using docTR
+    python app.py extract [pdf_path] [--no-preprocess]  - Extract text from PDF using docTR
     python app.py generate              - Generate test cases from invoice text
     python app.py serve                 - Start RAG API server
     python app.py test                  - Run full evaluation suite
+
+extract:
+    By default, pages are cleaned with an Albumentations pipeline (deskew,
+    denoise, contrast, sharpen, grayscale) before OCR. Cleaned page images
+    are saved to invoice/cleaned_pages/ for visual inspection/tuning.
+    Pass --no-preprocess to run docTR on the raw scan instead.
 """
 
 import json
@@ -27,6 +33,9 @@ import numpy as np
 
 from doctr.io import DocumentFile
 from doctr.models import ocr_predictor
+
+import cv2
+import albumentations as A
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOCUMENTS_DIR = os.path.join(BASE_DIR, "documents")
@@ -162,12 +171,67 @@ def expand_query(query, synonyms):
 CONFIDENCE_THRESHOLD = 0.5
 UNCLEAR_TAG_RE = re.compile(r"\[UNCLEAR:[^\]]*\]")
 
+CLAHE_CLIP_LIMIT = 2.0
+SHARPEN_ALPHA = (0.2, 0.4)
 
-def extract_text(pdf_path, confidence_threshold=CONFIDENCE_THRESHOLD):
+
+def compute_skew_angle(gray_img):
+    edges = cv2.Canny(gray_img, 50, 150, apertureSize=3)
+    coords = np.column_stack(np.where(edges > 0))
+    if len(coords) < 10:
+        return 0.0
+    angle = cv2.minAreaRect(coords)[-1]
+    if angle < -45:
+        angle = 90 + angle
+    return angle if abs(angle) > 0.1 else 0.0
+
+
+def clean_document_image(image_rgb):
+    image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+
+    angle = compute_skew_angle(gray)
+    if angle != 0.0:
+        deskew = A.Compose([
+            A.Rotate(limit=(angle, angle), border_mode=cv2.BORDER_REPLICATE, p=1.0),
+        ])
+        image_bgr = deskew(image=image_bgr)["image"]
+
+    pipeline = A.Compose([
+        A.MedianBlur(blur_limit=3, p=1.0),
+        A.CLAHE(clip_limit=CLAHE_CLIP_LIMIT, tile_grid_size=(8, 8), p=1.0),
+        A.Sharpen(alpha=SHARPEN_ALPHA, lightness=(0.9, 1.1), p=1.0),
+        A.ToGray(p=1.0),
+    ])
+    cleaned = pipeline(image=image_bgr)["image"]
+    if cleaned.ndim == 2:
+        cleaned = cv2.cvtColor(cleaned, cv2.COLOR_GRAY2RGB)
+    else:
+        cleaned = cv2.cvtColor(cleaned, cv2.COLOR_BGR2RGB)
+    return cleaned
+
+
+def extract_text(pdf_path, confidence_threshold=CONFIDENCE_THRESHOLD, preprocess=True,
+                  save_debug_dir=None):
     print(f"  OCR: running docTR on {pdf_path}...")
     model = ocr_predictor(pretrained=True)
-    doc = DocumentFile.from_pdf(pdf_path)
-    result = model(doc)
+    images = DocumentFile.from_pdf(pdf_path)
+
+    if preprocess:
+        print(f"  Preprocessing: cleaning {len(images)} page(s) with Albumentations...")
+        cleaned_images = []
+        for i, img in enumerate(images):
+            cleaned = clean_document_image(img)
+            cleaned_images.append(cleaned)
+            if save_debug_dir:
+                os.makedirs(save_debug_dir, exist_ok=True)
+                cv2.imwrite(
+                    os.path.join(save_debug_dir, f"page_{i}_cleaned.png"),
+                    cv2.cvtColor(cleaned, cv2.COLOR_RGB2BGR),
+                )
+        images = cleaned_images
+
+    result = model(images)
     exported = result.export()
 
     lines_out = []
@@ -529,23 +593,27 @@ def ask_backend(question):
     return resp.json()
 
 
-def cmd_extract(pdf_path=None):
+def cmd_extract(pdf_path=None, preprocess=True):
     if pdf_path is None:
         pdf_path = os.path.join(DOCUMENTS_DIR, "track1-4.pdf")
     if not os.path.exists(pdf_path):
         print(f"Error: {pdf_path} not found")
         sys.exit(1)
     os.makedirs(INVOICE_DIR, exist_ok=True)
+    debug_dir = os.path.join(INVOICE_DIR, "cleaned_pages") if preprocess else None
     print("=" * 60)
     print("  Invoice OCR Extraction")
     print("=" * 60)
     print(f"  Input:  {pdf_path}")
     print(f"  Output: {INVOICE_TEXT_PATH}")
+    print(f"  Preprocessing: {'ON (Albumentations)' if preprocess else 'OFF'}")
     print("=" * 60)
-    text, result = extract_text(pdf_path)
+    text, result = extract_text(pdf_path, preprocess=preprocess, save_debug_dir=debug_dir)
     with open(INVOICE_TEXT_PATH, "w", encoding="utf-8") as f:
         f.write(text)
     print(f"  Saved OCR text to {INVOICE_TEXT_PATH}")
+    if debug_dir:
+        print(f"  Saved cleaned page images to {debug_dir} for visual inspection")
     exported = result.export()
     with open(INVOICE_EXPORT_PATH, "w", encoding="utf-8") as f:
         json.dump(exported, f, indent=2)
@@ -855,8 +923,11 @@ if __name__ == "__main__":
         sys.exit(1)
     command = sys.argv[1]
     if command == "extract":
-        pdf_path = sys.argv[2] if len(sys.argv) > 2 else None
-        cmd_extract(pdf_path)
+        args = sys.argv[2:]
+        preprocess = "--no-preprocess" not in args
+        pdf_args = [a for a in args if a != "--no-preprocess"]
+        pdf_path = pdf_args[0] if pdf_args else None
+        cmd_extract(pdf_path, preprocess=preprocess)
     elif command == "generate":
         cmd_generate()
     elif command == "serve":
