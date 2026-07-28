@@ -159,14 +159,50 @@ def expand_query(query, synonyms):
     return " ".join(set(expanded_terms))
 
 
-def extract_text(pdf_path):
+CONFIDENCE_THRESHOLD = 0.5
+UNCLEAR_TAG_RE = re.compile(r"\[UNCLEAR:[^\]]*\]")
+
+
+def extract_text(pdf_path, confidence_threshold=CONFIDENCE_THRESHOLD):
     print(f"  OCR: running docTR on {pdf_path}...")
     model = ocr_predictor(pretrained=True)
     doc = DocumentFile.from_pdf(pdf_path)
     result = model(doc)
-    text = result.render()
-    print(f"  OCR: extracted {len(text)} characters")
+    exported = result.export()
+
+    lines_out = []
+    total_words = 0
+    low_conf_words = 0
+    for page in exported.get("pages", []):
+        for block in page.get("blocks", []):
+            for line in block.get("lines", []):
+                tokens = []
+                for word in line.get("words", []):
+                    total_words += 1
+                    value = word.get("value", "")
+                    conf = word.get("confidence", 1.0)
+                    if conf < confidence_threshold:
+                        low_conf_words += 1
+                        tokens.append(f"[UNCLEAR:{value}]")
+                    else:
+                        tokens.append(value)
+                lines_out.append(" ".join(tokens))
+            lines_out.append("")
+
+    text = "\n".join(lines_out)
+    pct = (low_conf_words / total_words * 100) if total_words else 0.0
+    print(f"  OCR: extracted {total_words} words ({low_conf_words} low-confidence, {pct:.1f}%)")
     return text, result
+
+
+def nearby_unclear(text, keywords, window=60):
+    for kw in keywords:
+        for m in re.finditer(re.escape(kw), text, re.IGNORECASE):
+            start = max(0, m.start() - window)
+            end = min(len(text), m.end() + window)
+            if UNCLEAR_TAG_RE.search(text[start:end]):
+                return True
+    return False
 
 
 def extract_regex(text):
@@ -178,10 +214,16 @@ def extract_regex(text):
                 value = match.group(1).strip()
                 if field == "currency" and value == "UNITED STATES DOLLAR":
                     value = "USD"
+                if UNCLEAR_TAG_RE.search(value):
+                    value = "UNREADABLE"
                 fields[field] = value
                 break
         if field not in fields:
-            fields[field] = "NOT_PRESENT"
+            label_words = re.split(r"\s+", field.replace("_", " "))
+            if nearby_unclear(text, label_words):
+                fields[field] = "UNREADABLE"
+            else:
+                fields[field] = "NOT_PRESENT"
     return fields
 
 
@@ -209,13 +251,15 @@ def extract_with_synonyms(text, synonyms, regex_fields):
                         value = "USD"
                     elif field == "currency" and len(value) > 3:
                         value = value[:3].upper()
+                    if UNCLEAR_TAG_RE.search(value):
+                        value = "UNREADABLE"
                     fields[field] = value
                     extracted = True
                     break
             if extracted:
                 break
         if not extracted:
-            fields[field] = "NOT_PRESENT"
+            fields[field] = "UNREADABLE" if nearby_unclear(text, field_synonyms) else "NOT_PRESENT"
     return fields
 
 
@@ -226,7 +270,14 @@ def extract_llm(text, llm, fields_to_extract):
         prompt = (
             "You are an invoice data extraction assistant. "
             "Extract the exact value for the field from the invoice text. "
-            "Reply ONLY with the extracted value or NOT_PRESENT. No explanations.\n\n"
+            "Reply ONLY with the extracted value, NOT_PRESENT, or UNREADABLE. No explanations.\n\n"
+            "The invoice text may contain tags like [UNCLEAR:word] — these mark spots where "
+            "the OCR scan could not confidently read the original document (blur, faded ink, "
+            "a stamp or signature covering the text, poor scan quality, etc.). "
+            "If the value you need overlaps with an [UNCLEAR:...] tag, or the surrounding text is "
+            "too garbled to tell what the value is, reply UNREADABLE. "
+            "Do NOT guess, autocorrect, or reconstruct a plausible-looking value from unclear text. "
+            "Only use NOT_PRESENT when the field is clearly absent from clean, readable text.\n\n"
             "EXAMPLE 1:\n"
             "Invoice text:\n"
             "Invoice No.: ZG155-2025\n"
@@ -266,6 +317,12 @@ def extract_llm(text, llm, fields_to_extract):
             "BL number: ONEYLOSF03789900\n\n"
             "Field: Is the beneficiary's signature present on the document?\n"
             "Value: NOT_PRESENT\n\n"
+            "EXAMPLE 7:\n"
+            "Invoice text:\n"
+            "Beneficiary Name: [UNCLEAR:ZED] [UNCLEAR:GL0BAL] LLC\n"
+            "Bank Name: [UNCLEAR:Mashreq] Bank\n\n"
+            "Field: Who is the beneficiary?\n"
+            "Value: UNREADABLE\n\n"
             "Now extract from:\n"
             f"Invoice text:\n{text[:3000]}\n\n"
             f"Field: {question}\n"
@@ -274,8 +331,13 @@ def extract_llm(text, llm, fields_to_extract):
         raw = llm.invoke(prompt)
         result = raw.content if hasattr(raw, "content") else str(raw)
         result = result.strip().strip('"').strip("'")
-        if "not present" in result.lower() or "not found" in result.lower():
+        result_lower = result.lower()
+        if "unreadable" in result_lower or "unclear" in result_lower or "cannot read" in result_lower:
+            fields[field] = "UNREADABLE"
+        elif "not present" in result_lower or "not found" in result_lower:
             fields[field] = "NOT_PRESENT"
+        elif UNCLEAR_TAG_RE.search(result):
+            fields[field] = "UNREADABLE"
         else:
             fields[field] = result
         print(f"  {field}: {fields[field][:80]}")
@@ -340,6 +402,17 @@ Rules:
 
 Your answer (only a number):"""
 
+    JUDGE_PROMPT_UNREADABLE = """You are a strict judge. The expected answer is UNREADABLE, meaning this information IS in the document but the scan/stamp/handwriting is too unclear for OCR to read reliably.
+
+Actual: "{actual}"
+
+Rules:
+- If the actual output says the information is not clearly visible, unreadable, unclear, or cannot be extracted due to document/scan quality -> answer: 5
+- If the actual output says it doesn't know / not present / not found (without mentioning it's an image-quality issue) -> answer: 3
+- If the actual output provides a specific, confident-sounding name, number, or value -> it is hallucinating from garbled text -> answer: 1
+
+Your answer (only a number):"""
+
     JUDGE_PROMPT_CONTEXT = """You are a strict judge evaluating whether an answer is correct based on the document context.
 
 Question: "{question}"
@@ -359,6 +432,8 @@ Your answer (only a number):"""
 
     if expected.upper() == "NOT_PRESENT":
         prompt = JUDGE_PROMPT_NOT_PRESENT.format(actual=answer)
+    elif expected.upper() == "UNREADABLE":
+        prompt = JUDGE_PROMPT_UNREADABLE.format(actual=answer)
     elif expected:
         norm_expected = normalize_for_judge(expected)
         norm_answer = normalize_for_judge(answer)
@@ -386,7 +461,7 @@ Your answer (only a number):"""
 def judge_pass(score, expected):
     if score is None:
         return False
-    if expected.upper() == "NOT_PRESENT":
+    if expected.upper() in ("NOT_PRESENT", "UNREADABLE"):
         return score >= 4
     return score >= 3
 
@@ -407,6 +482,12 @@ def check_answer_correctness(expected, answer):
             "don't know", "not present", "not mentioned",
             "not found", "not available", "no information",
             "cannot find", "no data", "does not mention", "not specified",
+        ])
+    if expected.upper() == "UNREADABLE":
+        ans = answer.lower()
+        return any(phrase in ans for phrase in [
+            "not clearly visible", "unreadable", "unclear", "cannot extract",
+            "cannot be reliably extracted", "poor scan", "blurry", "obscured",
         ])
     exp = normalize(expected)
     ans = normalize(answer)
@@ -545,6 +626,12 @@ def cmd_serve():
             "Extract the exact value, number, name, or code as it appears in the context. "
             "Do not confuse different fields — each line in the table is a separate item. "
             "If the context does not contain the answer, say 'I don't know'.\n\n"
+            "The context may contain tags like [UNCLEAR:word] marking spots the OCR scan could "
+            "not confidently read (blur, faded ink, a stamp/signature covering the text, poor "
+            "scan quality). If the answer to the question overlaps with an [UNCLEAR:...] tag, or "
+            "the relevant part of the context is too garbled to answer confidently, reply exactly: "
+            "'Not clearly visible in the document — cannot extract this information.' "
+            "Never guess, autocorrect, or reconstruct a plausible value from unclear text.\n\n"
             "IMPORTANT RULES:\n"
             "- For 'total amount' or 'amount to pay', use the FINAL invoice total "
             "(labeled 'TOTAL INVOICE AMOUNT', 'TOTAL AMOUNT TOPAY', or 'GRAND TOTAL'), "
@@ -614,6 +701,20 @@ def cmd_serve():
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
 
+    UNREADABLE_MESSAGE = (
+        "Not clearly visible in the document — cannot extract this information. "
+        "(The relevant portion of the scan appears blurry, faded, or obscured, e.g. by a stamp "
+        "or signature.)"
+    )
+    UNCLEAR_DENSITY_THRESHOLD = 0.25
+
+    def unclear_density(text):
+        words = text.split()
+        if not words:
+            return 0.0
+        tagged = len(UNCLEAR_TAG_RE.findall(text))
+        return tagged / len(words)
+
     def hybrid_retriever(query):
         expanded = expand_query(query, synonyms)
         embedding_docs = numpy_retrieve(expanded, top_k=5)
@@ -643,9 +744,14 @@ def cmd_serve():
     def query_docs(request: QueryRequest):
         if not request.question.strip():
             raise HTTPException(status_code=400, detail="Question cannot be empty.")
-        answer = rag_chain.invoke(request.question)
         source_docs_raw = hybrid_retriever(request.question)
         source_docs = [doc.page_content for doc in source_docs_raw]
+        combined_context = " ".join(source_docs)
+        if unclear_density(combined_context) > UNCLEAR_DENSITY_THRESHOLD:
+            return QueryResponse(answer=UNREADABLE_MESSAGE, source_documents=source_docs)
+        answer = rag_chain.invoke(request.question)
+        if UNCLEAR_TAG_RE.search(answer):
+            answer = UNREADABLE_MESSAGE
         return QueryResponse(answer=answer, source_documents=source_docs)
     @app.get("/health")
     def health():
