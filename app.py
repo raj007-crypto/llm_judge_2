@@ -4,10 +4,9 @@ Usage:
     python app.py extract [pdf_path] [--no-preprocess]  - Extract text from PDF using docTR
     python app.py generate              - Generate test cases from invoice text
     python app.py serve                 - Start RAG API server
-    python app.py test                  - Run full evaluation suite
 
 extract:
-    By default, pages are cleaned with an Albumentations pipeline (deskew,
+    By default, pages are cleaned with an OpenCV pipeline (deskew,
     denoise, contrast, sharpen, grayscale) before OCR. Cleaned page images
     are saved to invoice/cleaned_pages/ for visual inspection/tuning.
     Pass --no-preprocess to run docTR on the raw scan instead.
@@ -35,7 +34,6 @@ from doctr.io import DocumentFile
 from doctr.models import ocr_predictor
 
 import cv2
-import albumentations as A
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOCUMENTS_DIR = os.path.join(BASE_DIR, "documents")
@@ -136,19 +134,6 @@ LLM_FIELDS = [
     "beneficiary_bank_country", "intermediary_bank_name", "intermediary_swift",
 ]
 
-ADDITIONAL_QUESTIONS = [
-    "Which date is the time delivery on?",
-    "What is the bill number?",
-    "What are the bank charges?",
-    "Where is the shipment from?",
-    "Where is the shipment going?",
-    "What is the vessel name?",
-    "What is the consignee address?",
-    "What is the HS code?",
-    "What is the container number?",
-    "What are the shipping marks?",
-]
-
 
 def load_synonyms():
     if os.path.exists(SYNONYMS_PATH):
@@ -172,7 +157,6 @@ CONFIDENCE_THRESHOLD = 0.5
 UNCLEAR_TAG_RE = re.compile(r"\[UNCLEAR:[^\]]*\]")
 
 CLAHE_CLIP_LIMIT = 2.0
-SHARPEN_ALPHA = (0.2, 0.4)
 
 
 def compute_skew_angle(gray_img):
@@ -192,22 +176,29 @@ def clean_document_image(image_rgb):
 
     angle = compute_skew_angle(gray)
     if angle != 0.0:
-        deskew = A.Compose([
-            A.Rotate(limit=(angle, angle), border_mode=cv2.BORDER_REPLICATE, p=1.0),
-        ])
-        image_bgr = deskew(image=image_bgr)["image"]
+        h, w = image_bgr.shape[:2]
+        center = (w // 2, h // 2)
+        M = cv2.getRotationMatrix2D(center, angle, 1.0)
+        image_bgr = cv2.warpAffine(image_bgr, M, (w, h),
+                                    flags=cv2.INTER_LINEAR,
+                                    borderMode=cv2.BORDER_REPLICATE)
 
-    pipeline = A.Compose([
-        A.MedianBlur(blur_limit=3, p=1.0),
-        A.CLAHE(clip_limit=CLAHE_CLIP_LIMIT, tile_grid_size=(8, 8), p=1.0),
-        A.Sharpen(alpha=SHARPEN_ALPHA, lightness=(0.9, 1.1), p=1.0),
-        A.ToGray(p=1.0),
-    ])
-    cleaned = pipeline(image=image_bgr)["image"]
-    if cleaned.ndim == 2:
-        cleaned = cv2.cvtColor(cleaned, cv2.COLOR_GRAY2RGB)
-    else:
-        cleaned = cv2.cvtColor(cleaned, cv2.COLOR_BGR2RGB)
+    cleaned = cv2.medianBlur(image_bgr, 3)
+
+    lab = cv2.cvtColor(cleaned, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=(8, 8))
+    l = clahe.apply(l)
+    cleaned = cv2.merge([l, a, b])
+    cleaned = cv2.cvtColor(cleaned, cv2.COLOR_LAB2BGR)
+
+    kernel = np.array([[-1, -1, -1],
+                       [-1,  9, -1],
+                       [-1, -1, -1]], dtype=np.float32)
+    cleaned = cv2.filter2D(cleaned, -1, kernel)
+
+    cleaned = cv2.cvtColor(cleaned, cv2.COLOR_BGR2GRAY)
+    cleaned = cv2.cvtColor(cleaned, cv2.COLOR_GRAY2RGB)
     return cleaned
 
 
@@ -218,7 +209,7 @@ def extract_text(pdf_path, confidence_threshold=CONFIDENCE_THRESHOLD, preprocess
     images = DocumentFile.from_pdf(pdf_path)
 
     if preprocess:
-        print(f"  Preprocessing: cleaning {len(images)} page(s) with Albumentations...")
+        print(f"  Preprocessing: cleaning {len(images)} page(s) with OpenCV...")
         cleaned_images = []
         for i, img in enumerate(images):
             cleaned = clean_document_image(img)
@@ -433,166 +424,6 @@ def build_test_cases(all_fields):
     return cases
 
 
-def normalize_for_judge(s):
-    s = s.lower().strip()
-    s = re.sub(r"[$,\u20b9\u00a3\u20ac]", "", s)
-    s = re.sub(r"\s+", " ", s)
-    s = s.strip(".")
-    return s
-
-
-def judge_answer(question, answer, expected, context=""):
-    JUDGE_PROMPT_TEMPLATE = """Compare these two values and decide if they match.
-
-Expected: "{expected}"
-Actual: "{actual}"
-
-Rules:
-- If the values are identical, answer: 5
-- If one value is contained within the other, answer: 5
-- If the values represent the same thing, answer: 5
-- If the values are different numbers, answer: 1
-- If the values are completely different, answer: 1
-
-Answer only a number (1-5):"""
-
-    JUDGE_PROMPT_NOT_PRESENT = """You are a strict judge. The expected answer is NOT_PRESENT, meaning this information is NOT in the document.
-
-Actual: "{actual}"
-
-Rules:
-- If the actual output says it doesn't know, cannot find, or the information is not available -> answer: 5
-- If the actual output provides ANY specific name, number, or value -> it is hallucinating -> answer: 1
-
-Your answer (only a number):"""
-
-    JUDGE_PROMPT_UNREADABLE = """You are a strict judge. The expected answer is UNREADABLE, meaning this information IS in the document but the scan/stamp/handwriting is too unclear for OCR to read reliably.
-
-Actual: "{actual}"
-
-Rules:
-- If the actual output says the information is not clearly visible, unreadable, unclear, or cannot be extracted due to document/scan quality -> answer: 5
-- If the actual output says it doesn't know / not present / not found (without mentioning it's an image-quality issue) -> answer: 3
-- If the actual output provides a specific, confident-sounding name, number, or value -> it is hallucinating from garbled text -> answer: 1
-
-Your answer (only a number):"""
-
-    JUDGE_PROMPT_CONTEXT = """You are a strict judge evaluating whether an answer is correct based on the document context.
-
-Question: "{question}"
-Context: "{context}"
-Answer: "{actual}"
-
-Rules:
-- Check if the answer is supported by the context
-- Check if the answer is complete and relevant to the question
-- If the answer is fully supported by context and answers the question -> answer: 5
-- If the answer is partially supported or incomplete -> answer: 3
-- If the answer is not supported by context or irrelevant -> answer: 1
-- If the answer says "I don't know" but context has the answer -> answer: 1
-- If the answer says "I don't know" and context doesn't have the answer -> answer: 5
-
-Your answer (only a number):"""
-
-    if expected.upper() == "NOT_PRESENT":
-        prompt = JUDGE_PROMPT_NOT_PRESENT.format(actual=answer)
-    elif expected.upper() == "UNREADABLE":
-        prompt = JUDGE_PROMPT_UNREADABLE.format(actual=answer)
-    elif expected:
-        norm_expected = normalize_for_judge(expected)
-        norm_answer = normalize_for_judge(answer)
-        prompt = JUDGE_PROMPT_TEMPLATE.format(expected=norm_expected, actual=norm_answer)
-    else:
-        prompt = JUDGE_PROMPT_CONTEXT.format(question=question, context=context[:1000], actual=answer)
-    try:
-        resp = requests.post(OLLAMA_URL, json={
-            "model": JUDGE_MODEL,
-            "prompt": prompt,
-            "stream": False,
-            "options": {"temperature": 0, "num_predict": 100},
-        }, timeout=120)
-        resp.raise_for_status()
-        raw = resp.json().get("response", "").strip()
-        score = None
-        m = re.search(r"\b([1-5])\b", raw)
-        if m:
-            score = int(m.group(1))
-        return score, raw
-    except Exception as e:
-        return None, str(e)
-
-
-def judge_pass(score, expected):
-    if score is None:
-        return False
-    if expected.upper() in ("NOT_PRESENT", "UNREADABLE"):
-        return score >= 4
-    return score >= 3
-
-
-def normalize(s):
-    s = s.lower().strip()
-    s = re.sub(r"[$,]", "", s)
-    s = re.sub(r"\s+", " ", s)
-    return s
-
-
-def check_answer_correctness(expected, answer):
-    if not expected:
-        return False
-    if expected.upper() == "NOT_PRESENT":
-        ans = answer.lower()
-        return any(phrase in ans for phrase in [
-            "don't know", "not present", "not mentioned",
-            "not found", "not available", "no information",
-            "cannot find", "no data", "does not mention", "not specified",
-        ])
-    if expected.upper() == "UNREADABLE":
-        ans = answer.lower()
-        return any(phrase in ans for phrase in [
-            "not clearly visible", "unreadable", "unclear", "cannot extract",
-            "cannot be reliably extracted", "poor scan", "blurry", "obscured",
-        ])
-    exp = normalize(expected)
-    ans = normalize(answer)
-    if exp in ans:
-        return True
-    exp_stripped = re.sub(r"^(messrs\.?:?\s*|m/s\.?\s*|the\s+|mr\.?\s*|mrs\.?\s*|ms\.?\s*|dr\.?\s*)", "", exp)
-    if exp_stripped and exp_stripped in ans:
-        return True
-    ans_stripped = re.sub(r"^(messrs\.?:?\s*|m/s\.?\s*|the\s+|mr\.?\s*|mrs\.?\s*|ms\.?\s*|dr\.?\s*)", "", ans)
-    if ans_stripped and ans_stripped in exp:
-        return True
-    if ans_stripped and ans_stripped in exp_stripped:
-        return True
-    try:
-        return abs(float(exp) - float(ans)) < 0.01
-    except ValueError:
-        return False
-
-
-def check_answer_in_context(answer, contexts):
-    keys = []
-    val = re.sub(r"(?i)^the\s+.*?(?:is|was|are|were)[:\s]+", "", answer).strip()
-    val = val.rstrip(".")
-    if val:
-        keys = [normalize(val)]
-    else:
-        tokens = normalize(answer).split()
-        keys = [t for t in tokens if len(t) > 2]
-    combined_ctx = " ".join(normalize(c) for c in contexts)
-    for k in keys:
-        if k in combined_ctx:
-            return True
-    return False
-
-
-def ask_backend(question):
-    resp = requests.post(BACKEND_URL, json={"question": question}, timeout=60)
-    resp.raise_for_status()
-    return resp.json()
-
-
 def cmd_extract(pdf_path=None, preprocess=True):
     if pdf_path is None:
         pdf_path = os.path.join(DOCUMENTS_DIR, "track1-4.pdf")
@@ -606,7 +437,7 @@ def cmd_extract(pdf_path=None, preprocess=True):
     print("=" * 60)
     print(f"  Input:  {pdf_path}")
     print(f"  Output: {INVOICE_TEXT_PATH}")
-    print(f"  Preprocessing: {'ON (Albumentations)' if preprocess else 'OFF'}")
+    print(f"  Preprocessing: {'ON (OpenCV)' if preprocess else 'OFF'}")
     print("=" * 60)
     text, result = extract_text(pdf_path, preprocess=preprocess, save_debug_dir=debug_dir)
     with open(INVOICE_TEXT_PATH, "w", encoding="utf-8") as f:
@@ -827,96 +658,6 @@ def cmd_serve():
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 
-def cmd_test():
-    try:
-        with open(TEST_CASES_PATH) as f:
-            test_cases = json.load(f)
-            if not isinstance(test_cases, list):
-                test_cases = []
-    except (FileNotFoundError, json.JSONDecodeError):
-        test_cases = []
-    for q in ADDITIONAL_QUESTIONS:
-        test_cases.append({"question": q, "expected": "", "field": "additional"})
-    print("=" * 70)
-    print("  Invoice RAG + LLM Judge — Full Evaluation Suite")
-    print("=" * 70)
-    print(f"  Backend  : {BACKEND_URL}")
-    print(f"  Judge    : {JUDGE_MODEL}")
-    print(f"  Tests    : {len(test_cases)} invoice Q&A pairs")
-    print("  Pass/Fail based on: LLM judge evaluation (score >= 3 = PASS)")
-    print("=" * 70)
-    results = []
-    start = time.time()
-    for i, tc in enumerate(test_cases, 1):
-        question = tc.get("question", "")
-        expected = tc.get("expected", "")
-        if not question:
-            continue
-        print(f"\n[{i}/{len(test_cases)}] {question}")
-        try:
-            result = ask_backend(question)
-            answer = result.get("answer", "")
-            contexts = result.get("source_documents", [])
-        except Exception as e:
-            print(f"  Backend error: {e}")
-            results.append({"pass": False, "question": question, "answer": "ERROR"})
-            continue
-        correct_answer = check_answer_correctness(expected, answer) if expected else False
-        in_context = check_answer_in_context(answer, contexts)
-        combined_context = "\n".join(contexts) if contexts else ""
-        if expected:
-            score, reason = judge_answer(question, answer, expected)
-        else:
-            score, reason = judge_answer(question, answer, "", combined_context)
-        overall_pass = judge_pass(score, expected if expected else "CONTEXT_BASED")
-        status = "PASS" if overall_pass else "FAIL"
-        print(f"  Answer   : {answer}")
-        if expected:
-            print(f"  Expected : {expected}")
-        score_str = f"{score}/5" if score is not None else "N/A"
-        print(f"  Judge    : {score_str}")
-        if expected:
-            print(f"  Correct  : {'YES' if correct_answer else 'NO'}")
-        print(f"  Verdict  : {status}")
-        results.append({
-            "pass": overall_pass, "correct_answer": correct_answer,
-            "in_context": in_context, "question": question,
-            "answer": answer, "expected": expected, "score": score, "reason": reason,
-        })
-        time.sleep(0.5)
-    elapsed = time.time() - start
-    passed = sum(1 for r in results if r["pass"])
-    failed = sum(1 for r in results if not r["pass"])
-    correct_answers = sum(1 for r in results if r.get("correct_answer"))
-    print("\n")
-    print("=" * 70)
-    print("  SUMMARY")
-    print("=" * 70)
-    print(f"  Total tests        : {len(results)}")
-    print(f"  Correct answers    : {correct_answers}/{len(results)}")
-    print(f"  Overall PASS       : {passed}/{len(results)}")
-    print(f"  Overall FAIL       : {failed}/{len(results)}")
-    print(f"  Time elapsed       : {elapsed:.1f}s")
-    print("=" * 70)
-    if failed > 0:
-        print("\n  FAILED CASES:")
-        print("-" * 70)
-        for r in results:
-            if not r["pass"]:
-                print(f"  Q: {r['question']}")
-                print(f"     A: {r.get('answer', 'N/A')}")
-                if r.get("expected"):
-                    print(f"     Expected: {r.get('expected', 'N/A')}")
-                print(f"     Judge: {r.get('score', '?')}/5")
-                reason_short = (r.get("reason", "N/A") or "")[:150]
-                print(f"     Reason: {reason_short}...")
-                print()
-    print("=" * 70)
-    verdict = "ALL PASS" if failed == 0 else f"{failed} FAILED"
-    print(f"  RESULT: {verdict}")
-    print("=" * 70)
-
-
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(__doc__)
@@ -932,8 +673,6 @@ if __name__ == "__main__":
         cmd_generate()
     elif command == "serve":
         cmd_serve()
-    elif command == "test":
-        cmd_test()
     else:
         print(f"Unknown command: {command}")
         print(__doc__)
