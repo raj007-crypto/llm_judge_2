@@ -156,6 +156,110 @@ def expand_query(query, synonyms):
 CONFIDENCE_THRESHOLD = 0.5
 UNCLEAR_TAG_RE = re.compile(r"\[UNCLEAR:[^\]]*\]")
 
+FIELD_LABELS = [
+    "our reference no",
+    "additional reference no",
+    "reference no",
+    "currency",
+    "date",
+    "account no",
+    "amount in words",
+    "beneficiary name",
+    "beneficiary country",
+    "beneficiary bank",
+    "grand total",
+    "total invoice amount",
+]
+
+FIELD_NOT_PRESENT_MESSAGE = (
+    "The requested field is not present in the document - the value could not be extracted."
+)
+
+_COMBINED_CONNECTOR_RE = re.compile(
+    r"^(?:&|and\b|/|,|\+|with\b|plus\b|including\b)\s*", re.IGNORECASE
+)
+
+
+def _norm_text(s):
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def _label_prefix_match(rest_norm, label_norm):
+    from difflib import SequenceMatcher
+
+    n = min(len(rest_norm), len(label_norm) + 4)
+    if n < 8:
+        return False
+    return SequenceMatcher(None, rest_norm[:n], label_norm[:n]).ratio() > 0.8
+
+
+def asked_field_labels(question):
+    q = question.lower()
+    labels = []
+    if "our reference" in q or ("reference" in q and "additional" not in q):
+        labels.append("our reference no")
+    if "additional reference" in q:
+        labels.append("additional reference no")
+    if "currency" in q:
+        labels.append("currency")
+    if "beneficiary" in q:
+        labels.append("beneficiary name")
+    return labels
+
+
+def _plausible_value(s):
+    s = s.strip()
+    if not s:
+        return False
+    if re.search(r"[0-9]", s):
+        return True
+    letters = re.sub(r"[^a-z]", "", s)
+    return bool(letters) and s == s.upper() and len(letters) >= 2
+
+
+def field_has_readable_value(context, label):
+    ctx_lower = context.lower()
+    start = 0
+    any_occurrence = False
+    any_value = False
+    while True:
+        idx = ctx_lower.find(label, start)
+        if idx == -1:
+            break
+        any_occurrence = True
+        rest_raw = context[idx + len(label):]
+        rest = rest_raw.lstrip(" \t.:-\r\n")
+        if not rest:
+            start = idx + len(label)
+            continue
+        if UNCLEAR_TAG_RE.match(rest):
+            start = idx + len(label)
+            continue
+        if _COMBINED_CONNECTOR_RE.match(rest):
+            any_value = True
+            start = idx + len(label)
+            continue
+        same_line = rest_raw.split("\n", 1)[0].strip(" \t.:-")
+        if same_line:
+            if _plausible_value(same_line):
+                any_value = True
+            start = idx + len(label)
+            continue
+        rest_norm = _norm_text(rest)
+        followed_by_label = False
+        for other in FIELD_LABELS:
+            if _norm_text(other) == _norm_text(label):
+                continue
+            if _label_prefix_match(rest_norm, _norm_text(other)):
+                followed_by_label = True
+                break
+        if not followed_by_label:
+            any_value = True
+        start = idx + len(label)
+    if not any_occurrence:
+        return True
+    return any_value
+
 CLAHE_CLIP_LIMIT = 2.0
 
 
@@ -532,13 +636,23 @@ def cmd_serve():
             "'Not clearly visible in the document — cannot extract this information.' "
             "Never guess, autocorrect, or reconstruct a plausible value from unclear text.\n\n"
             "IMPORTANT RULES:\n"
+            "- If the asked field label is immediately followed by ANOTHER field label instead of "
+            "a value (e.g. 'Our Reference No Addtional Reference No. CO25/533004'), the asked field "
+            "has NO value of its own. Do NOT use the value that follows the other label. "
+            "Instead say the field is not present ('I don't know').\n"
             "- For 'total amount' or 'amount to pay', use the FINAL invoice total "
             "(labeled 'TOTAL INVOICE AMOUNT', 'TOTAL AMOUNT TOPAY', or 'GRAND TOTAL'), "
             "NOT individual line-item totals.\n"
             "- Line-item totals appear on individual rows (e.g., '21,480' next to an item). "
             "The invoice total appears at the bottom after all items, often labeled 'TOTAL INVOICE AMOUNT' or 'TOTAL AMOUNT TOPAY'.\n"
             "- If multiple totals appear, prefer the one with the highest label specificity "
-            "('TOTAL INVOICE AMOUNT' > 'TOTAL' > line-item subtotals).\n\n"
+            "('TOTAL INVOICE AMOUNT' > 'TOTAL' > line-item subtotals).\n"
+            "- When you CAN answer, respond in a complete natural sentence "
+            "(e.g. 'The currency is USD.' or 'The total invoice amount is 3,423.44 USD.'), "
+            "extracting the value exactly as it appears in the context. Do not add extra "
+            "explanation, commentary, or details beyond the answer.\n"
+            "- When you CANNOT answer, still reply exactly as specified above "
+            "('I don't know' or 'Not clearly visible in the document — cannot extract this information.').\n\n"
             "Important terminology:\n"
             "- Remitter / Buyer / Applicant / Consignee = the party BUYING the goods (who pays)\n"
             "- Beneficiary / Seller = the party SELLING the goods (who receives payment)\n"
@@ -648,6 +762,9 @@ def cmd_serve():
         combined_context = " ".join(source_docs)
         if unclear_density(combined_context) > UNCLEAR_DENSITY_THRESHOLD:
             return QueryResponse(answer=UNREADABLE_MESSAGE, source_documents=source_docs)
+        for label in asked_field_labels(request.question):
+            if not field_has_readable_value(combined_context, label):
+                return QueryResponse(answer=FIELD_NOT_PRESENT_MESSAGE, source_documents=source_docs)
         answer = rag_chain.invoke(request.question)
         if UNCLEAR_TAG_RE.search(answer):
             answer = UNREADABLE_MESSAGE

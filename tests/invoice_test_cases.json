@@ -1,112 +1,22 @@
 [
-  {
-    "question": "What is the type of this invoice?",
-    "expected": "COMMERCIAL INVOICE",
-    "field": "invoice_type"
-  },
-  {
-    "question": "What is the invoice number?",
-    "expected": "140825/AN-SAW",
-    "field": "invoice_number"
-  },
-  {
-    "question": "What is the invoice date?",
-    "expected": "14th. Aug., 2025",
-    "field": "invoice_date"
-  },
-  {
-    "question": "What goods are described in the invoice?",
-    "expected": "9 INCHES BAMBOO STICK 1.3MM (FOR MAKING AGARBATTI)\n12 INCHES BAMBOO STICK 1.3MM (FOR MAKING AGARBATTI)",
-    "field": "goods_description"
-  },
-  {
-    "question": "What is the quantity of goods?",
-    "expected": "21,480",
-    "field": "quantity_of_goods"
-  },
-  {
-    "question": "What are the units of quantity?",
-    "expected": "BAGS",
-    "field": "units_of_quantity"
-  },
-  {
-    "question": "What is the total invoice amount?",
-    "expected": "17,958.00",
-    "field": "total_amount"
-  },
-  {
-    "question": "What currency is the invoice in?",
-    "expected": "USD",
-    "field": "currency"
-  },
-  {
-    "question": "What are the payment terms?",
-    "expected": "By TTR 100% payment: after received documents scan.",
-    "field": "payment_terms"
-  },
-  {
-    "question": "Who is the beneficiary?",
-    "expected": "An Nam International Co., Ltd",
-    "field": "beneficiary_name"
-  },
-  {
-    "question": "What country is the beneficiary in?",
-    "expected": "Vietnam",
-    "field": "beneficiary_country"
-  },
-  {
-    "question": "Is the beneficiary's signature present on the document?",
-    "expected": "NOT_PRESENT",
-    "field": "beneficiary_signature_present"
-  },
-  {
-    "question": "Who is the applicant or buyer?",
-    "expected": "Messrs.: SRIRAM AGARBATHI WORKS",
-    "field": "applicant_name"
-  },
-  {
-    "question": "Is the applicant's signature present on the document?",
-    "expected": "NOT_PRESENT",
-    "field": "applicant_signature_present"
-  },
-  {
-    "question": "Who is the remitter?",
-    "expected": "Messrs.: SRIRAM AGARBATHI WORKS",
-    "field": "remitter_name"
-  },
-  {
-    "question": "What country is the remitter in?",
-    "expected": "India",
-    "field": "remitter_country"
-  },
-  {
-    "question": "What is the beneficiary bank name?",
-    "expected": "Asia Commercial Bank - Phan Dang Luu Branch.",
-    "field": "beneficiary_bank_name"
-  },
-  {
-    "question": "What is the beneficiary bank account number?",
-    "expected": "98753889",
-    "field": "beneficiary_bank_account_number"
-  },
-  {
-    "question": "What country is the beneficiary bank in?",
-    "expected": "Vietnam",
-    "field": "beneficiary_bank_country"
-  },
-  {
-    "question": "What is the beneficiary bank swift code?",
-    "expected": "ASCBVNVX",
-    "field": "beneficiary_swift_code"
-  },
-  {
-    "question": "What is the intermediary bank name?",
-    "expected": "NOT_PRESENT",
-    "field": "intermediary_bank_name"
-  },
-  {
-    "question": "What is the intermediary bank swift code?",
-    "expected": "NOT_PRESENT",
-    "field": "intermediary_swift"
-  }
+    {"question": "What is the additional reference number?", "expected": "CO25/533004"},
+    {"question": "What is our reference number?", "expected": "NOT_PRESENT"},
+    {"question": "What is the reference number?", "expected": "CO25/533004"},
+    {"question": "What is the currency?", "expected": "USD"},
+    {"question": "What is the beneficiary name?", "expected": "AEROSPHERES"},
+    {"question": "Who is the beneficiary?", "expected": "AEROSPHERES"},
+    {"question": "What is the beneficiary country?", "expected": "NOT_PRESENT"},
+    {"question": "What is the amount?", "expected": "3,423.44"},
+    {"question": "What is the account number?", "expected": "10230318914"},
+    {"question": "What is the date?", "expected": "04/11/2025"},
+    {"question": "Who is the customer?", "expected": "POORVI"},
+    {"question": "What is the customer name?", "expected": "POORVI"},
+    {"question": "What is the total amount?", "expected": "367.54"},
+    {"question": "What is the grand total?", "expected": "367.54"},
+    {"question": "What is the amount in words?", "expected": "NOT_PRESENT"},
+    {"question": "What is the GSTIN?", "expected": "NOT_PRESENT"},
+    {"question": "What is the invoice number?", "expected": "NOT_PRESENT"},
+    {"question": "What is the SWIFT code?", "expected": "NOT_PRESENT"},
+    {"question": "What is the IBAN?", "expected": "NOT_PRESENT"},
+    {"question": "What is the debit amount?", "expected": "308.751.02"}
 ]
